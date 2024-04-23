@@ -1,7 +1,8 @@
 import logging
-from telegram.ext import Application, MessageHandler, filters
-from telegram.ext import CommandHandler, ConversationHandler
-from telegram import ReplyKeyboardMarkup
+from telegram.ext import Application, MessageHandler, filters, CallbackQueryHandler
+from telegram.ext import CommandHandler, ConversationHandler, ContextTypes
+from telegram import ReplyKeyboardMarkup, \
+    InlineKeyboardButton, InlineKeyboardMarkup, Update
 import requests
 from bs4 import BeautifulSoup
 
@@ -13,8 +14,10 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-reply_keyboard = [['/help']]
+reply_keyboard = [['/izbrannoe'], ['/help']]
 markup = ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=False, resize_keyboard=True)
+
+res_poisk_po_ingredientu_d = {}
 
 
 def pars():
@@ -87,7 +90,7 @@ async def start(update, context):
         rf"Привет {user.mention_html()}! Я бармен-бот! Я могу помочь с приготовлением напитка, который вам по душе). "
         rf"Используйте команду 'поиск по названию напитка', "
         rf"'поиск по ингридиенту' или 'поиск рецепта напитка' чтобы начать диалог"
-        rf"")
+        rf"", reply_markup=markup)
 
 
 async def help_command(update, context):
@@ -101,19 +104,21 @@ async def poisk_po_ingredientu(update, context):
 
 
 async def poisk_po_ingredientu_2_vop(update, context):
-    context.user_data['fisrt_ing'] = update.message.text
+    global res_poisk_po_ingredientu_d
+    res_poisk_po_ingredientu_d['fisrt_ing'] = update.message.text
     await update.message.reply_text("Ага, а теперь второй ингредиент.")
     return 2
 
 
 async def res_poisk_po_ingredientu(update, context):
-    context.user_data['second_ing'] = update.message.text
+    global res_poisk_po_ingredientu_d
+    res_poisk_po_ingredientu_d['second_ing'] = update.message.text
     spis = pars()
     res_nap = []
 
     for nap, ings in spis.items():
-        if context.user_data["fisrt_ing"].lower().capitalize() in ings:
-            if context.user_data["second_ing"].lower().capitalize() in ings:
+        if res_poisk_po_ingredientu_d["fisrt_ing"].lower().capitalize() in ings:
+            if res_poisk_po_ingredientu_d["second_ing"].lower().capitalize() in ings:
                 res_nap.append(nap)
 
     if len(res_nap) != 0:
@@ -125,7 +130,8 @@ async def res_poisk_po_ingredientu(update, context):
         await update.message.reply_text(f'Выдача напитков окончена')
     else:
         await update.message.reply_text(f'Простите, я не нашел напиток с таким набором ингредиентов')
-    context.user_data.clear()
+    res_poisk_po_ingredientu_d.clear()
+    print(res_poisk_po_ingredientu_d)
     return ConversationHandler.END
 
 
@@ -134,16 +140,58 @@ async def poisk_napitka(update, context):
     return 1
 
 
-async def res_poisk_napitka(update, context):
+async def res_poisk_napitka(update: Update, context: ContextTypes.DEFAULT_TYPE):
     spis = pars()
     nap = update.message.text.lower().capitalize()
+    keyboard = [
+        [InlineKeyboardButton("Добавить в избранное", callback_data=f"{nap}")]
+    ]
+
+    reply_markup_2 = InlineKeyboardMarkup(keyboard)
     n = '\n'
     if nap in spis.keys():
         await update.message.reply_text(f"Вот список ингредиентов для {nap}:\n\n"
-                                        f"{f'{n}'.join(spis[nap])}")
+                                        f"{f'{n}'.join(spis[nap])}", reply_markup=reply_markup_2)
     else:
         await update.message.reply_text(f'Простите, я не нашел такой напиток.')
     return ConversationHandler.END
+
+
+async def dob_v_izb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data[-1] == 'd':
+        if query.data[:-1] in context.user_data.keys():
+            context.user_data.pop(query.data[:-1])
+            await query.edit_message_text(text=f"Напиток {query.data[:-1]} убран из избранных.")
+        else:
+            await query.edit_message_text(text=f"Напиток {query.data[:-1]} уже убран из избранных.")
+
+    elif query.data == 'no':
+        await query.edit_message_text(text=f"Ничего не изменилось.")
+
+    elif query.data.lower().capitalize() == 'Del':
+        keyboard = [
+            [InlineKeyboardButton("Не удалять", callback_data=f"no")]
+        ]
+
+        for nap in context.user_data.keys():
+            keyboard.append([InlineKeyboardButton(f"{nap}", callback_data=f"{nap}d")])
+
+        reply_markup_1 = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(text=f"Вы точно хотите удалить напиток из избранного?",
+                                      reply_markup=reply_markup_1)
+        query.data = ''
+    else:
+        if query.data.lower().capitalize() in context.user_data.keys():
+            await query.edit_message_text(text=f"Вы уже добавили напиток {query.data.lower().capitalize()}"
+                                               f" в избранное.")
+        else:
+            context.user_data[query.data.lower().capitalize()] = query.data.lower().capitalize()
+            await query.edit_message_text(text=f"Напиток {query.data.lower().capitalize()} добавлен в избранное.")
+        query.data = ''
 
 
 async def poisk_recepta(update, context):
@@ -167,6 +215,21 @@ async def res_poisk_recepta(update, context):
     else:
         await update.message.reply_text(f'Простите, я не нашел такой напиток.')
     return ConversationHandler.END
+
+
+async def izbrannoe(update, context):
+    res = ''
+    keyboard = [
+        [InlineKeyboardButton("Удалить из избранного", callback_data=f"DEL")]
+    ]
+
+    reply_markup_1 = InlineKeyboardMarkup(keyboard)
+    if context.user_data != {}:
+        for nap in context.user_data.keys():
+            res += f'\n{nap}'
+        await update.message.reply_text(f"Избранные напитки:\n{res}", reply_markup=reply_markup_1)
+    else:
+        await update.message.reply_text(f"Вы еще не добавили никакой напиток.")
 
 
 async def stop(update, context):
@@ -214,7 +277,9 @@ def main():
     application.add_handler(conv_handler_ing)
     application.add_handler(conv_handler_nap)
     application.add_handler(conv_handler_recipe)
+    application.add_handler(CallbackQueryHandler(dob_v_izb))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("izbrannoe", izbrannoe))
     application.add_handler(text_handler)
 
     application.run_polling()
